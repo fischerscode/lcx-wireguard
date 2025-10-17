@@ -38,7 +38,7 @@ jobs:
             --keyring=/usr/share/keyrings/debian-archive-removed-keys.gpg \
             --aptopt='Acquire::Retries "5"' \
             --aptopt='Acquire::Languages "none"' \
-            --include=wireguard-tools,iproute2,iptables,nftables,systemd-sysv,procps,ca-certificates \
+            --include=wireguard-tools,iproute2,iptables,nftables,systemd-sysv,procps,ca-certificates,ifupdown,openssh-server,iputils-ping,curl \
             ${SUITE} rootfs ${MIRROR}
 
           # Only start wg-quick if /etc/wireguard/wg0.conf exists
@@ -57,6 +57,14 @@ jobs:
           sudo mkdir -p rootfs/etc/wireguard
           # Trim apt lists to keep the template small
           sudo rm -rf rootfs/var/lib/apt/lists/* || true
+
+          sudo tee rootfs/etc/network/interfaces >/dev/null <<'EOF'
+          auto lo
+          iface lo inet loopback
+          # PVE füllt eth0 hier beim Erstellen aus
+          EOF
+
+          sudo mkdir -p rootfs/etc/network/interfaces.d
 
       - name: Pack Proxmox LXC template (.tar.zst)
         run: |
