@@ -1,0 +1,50 @@
+name: build-wireguard-lxc
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mmdebstrap zstd xz-utils
+
+      - name: Build rootfs
+        run: |
+          sudo mmdebstrap --architectures=amd64 --variant=minbase \
+            --include=wireguard-tools,iproute2,iptables-nft,systemd-sysv,procps,ca-certificates \
+            bookworm rootfs
+
+          # systemd drop-in so image boots fine with no config present
+          sudo mkdir -p rootfs/etc/systemd/system/wg-quick@wg0.service.d
+          cat <<'EOF' | sudo tee rootfs/etc/systemd/system/wg-quick@wg0.service.d/10-conditional.conf
+          [Unit]
+          ConditionPathExists=/etc/wireguard/wg0.conf
+          EOF
+
+          # Forwarding defaults (harmless if you don't NAT)
+          sudo mkdir -p rootfs/etc/sysctl.d
+          echo 'net.ipv4.ip_forward=1' | sudo tee rootfs/etc/sysctl.d/99-wg.conf
+          echo 'net.ipv6.conf.all.forwarding=1' | sudo tee -a rootfs/etc/sysctl.d/99-wg.conf
+
+          # empty dir to be over-mounted later
+          sudo mkdir -p rootfs/etc/wireguard
+
+      - name: Pack template
+        run: |
+          T="debian-12-wireguard-amd64_${{ github.ref_name }}.tar"
+          sudo tar --numeric-owner --xattrs --acls -C rootfs -cf "$T"
+          zstd -19 --rm "$T"
+          sha256sum "${T}.zst" > SHA256SUMS
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.tar.zst
+            SHA256SUMS
