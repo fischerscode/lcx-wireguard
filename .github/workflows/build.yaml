@@ -63,7 +63,14 @@ jobs:
           set -euxo pipefail
           VERSION="${GITHUB_REF_NAME:-dev}"
           TEMPLATE="debian-13-wireguard-${ARCH}_${VERSION}.tar"
-          sudo tar --numeric-owner --xattrs --acls -C rootfs -cf "${TEMPLATE}"
+
+          # Sanity check: ensure rootfs isn't empty
+          sudo test -d rootfs/etc
+          sudo ls -la rootfs | head -n 50
+
+          # The important fix is the trailing dot after -C rootfs
+          sudo tar --numeric-owner --xattrs --acls -C rootfs -cf "${TEMPLATE}" .
+
           zstd -19 --rm "${TEMPLATE}"
           sha256sum "${TEMPLATE}.zst" > SHA256SUMS
 
