@@ -41,10 +41,10 @@ jobs:
             --include=wireguard-tools,iproute2,iptables,nftables,systemd-sysv,procps,ca-certificates,ifupdown,openssh-server,iputils-ping,curl \
             ${SUITE} rootfs ${MIRROR}
 
-          mkdir -p rootfs/etc/systemd/system
-          ln -sfn /dev/null rootfs/etc/systemd/system/systemd-networkd-wait-online.service
-          ln -sfn /dev/null rootfs/etc/systemd/system/systemd-networkd.service
-          mkdir -p rootfs/etc/systemd/system-preset
+          sudo mkdir -p rootfs/etc/systemd/system
+          sudo ln -sfn /dev/null rootfs/etc/systemd/system/systemd-networkd-wait-online.service
+          sudo ln -sfn /dev/null rootfs/etc/systemd/system/systemd-networkd.service
+          sudo mkdir -p rootfs/etc/systemd/system-preset
           printf '%s\n' \
             'disable systemd-networkd.service' \
             'disable systemd-networkd-wait-online.service' \
