@@ -1,17 +1,15 @@
 name: build-wireguard-lxc
 on:
   push:
-    tags: ["v*"] # create a tag like v1.0.0 to trigger a release build
-  workflow_dispatch: # allows manual runs
+    tags: ["v*"] # tag like v1.0.0 to build a release
+  workflow_dispatch:
 
 permissions:
-  contents: write # needed for creating GitHub Releases
+  contents: write # needed to create GitHub Releases
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Run the build IN Debian 13 to avoid keyring/mismatch issues
-    container: debian:13-slim
 
     env:
       SUITE: trixie
@@ -21,51 +19,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build deps
+      - name: Install build deps (host runner)
         run: |
           set -euxo pipefail
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            mmdebstrap debootstrap gnupg ca-certificates \
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mmdebstrap debootstrap debian-archive-keyring gnupg \
             zstd xz-utils tar
 
-      - name: Build minimal Debian rootfs with WireGuard tools
+      - name: Build minimal Debian ${SUITE} rootfs with WireGuard tools
         run: |
           set -euxo pipefail
 
-          # Build minimal rootfs (no secrets inside)
-          mmdebstrap --architectures=${ARCH} --variant=minbase \
+          # Build as root on the VM so we have CAP_SYS_ADMIN for mounts
+          sudo mmdebstrap --mode=root \
+            --architectures=${ARCH} --variant=minbase \
             --keyring=/usr/share/keyrings/debian-archive-keyring.gpg \
             --keyring=/usr/share/keyrings/debian-archive-removed-keys.gpg \
             --aptopt='Acquire::Retries "5"' \
             --aptopt='Acquire::Languages "none"' \
-            --include=wireguard-tools,iproute2,iptables-nft,systemd-sysv,procps,ca-certificates \
+            --include=wireguard-tools,iproute2,iptables,nftables,systemd-sysv,procps,ca-certificates \
             ${SUITE} rootfs ${MIRROR}
 
-          # systemd drop-in: only start if /etc/wireguard/wg0.conf exists
-          mkdir -p rootfs/etc/systemd/system/wg-quick@wg0.service.d
-          cat > rootfs/etc/systemd/system/wg-quick@wg0.service.d/10-conditional.conf <<'EOF'
+          # Only start wg-quick if /etc/wireguard/wg0.conf exists
+          sudo mkdir -p rootfs/etc/systemd/system/wg-quick@wg0.service.d
+          sudo tee rootfs/etc/systemd/system/wg-quick@wg0.service.d/10-conditional.conf >/dev/null <<'EOF'
           [Unit]
           ConditionPathExists=/etc/wireguard/wg0.conf
           EOF
 
           # Enable forwarding by default (harmless if you don't NAT)
-          mkdir -p rootfs/etc/sysctl.d
-          printf 'net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\n' \
-            > rootfs/etc/sysctl.d/99-wg.conf
+          sudo mkdir -p rootfs/etc/sysctl.d
+          printf 'net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\n' | \
+            sudo tee rootfs/etc/sysctl.d/99-wg.conf >/dev/null
 
           # Empty dir to be bind-mounted read-only later by Terraform
-          mkdir -p rootfs/etc/wireguard
-
-          # Optional: trim APT lists to keep the image small
-          rm -rf rootfs/var/lib/apt/lists/* || true
+          sudo mkdir -p rootfs/etc/wireguard
+          # Trim apt lists to keep the template small
+          sudo rm -rf rootfs/var/lib/apt/lists/* || true
 
       - name: Pack Proxmox LXC template (.tar.zst)
         run: |
           set -euxo pipefail
           VERSION="${GITHUB_REF_NAME:-dev}"
           TEMPLATE="debian-13-wireguard-${ARCH}_${VERSION}.tar"
-          tar --numeric-owner --xattrs --acls -C rootfs -cf "${TEMPLATE}"
+          sudo tar --numeric-owner --xattrs --acls -C rootfs -cf "${TEMPLATE}"
           zstd -19 --rm "${TEMPLATE}"
           sha256sum "${TEMPLATE}.zst" > SHA256SUMS
 
@@ -79,7 +77,7 @@ jobs:
             SHA256SUMS
           generate_release_notes: true
 
-      - name: Upload artifact (for workflow runs without a tag)
+      - name: Upload artifact when not tagged
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
