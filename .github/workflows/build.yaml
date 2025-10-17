@@ -47,6 +47,10 @@ jobs:
           [Unit]
           ConditionPathExists=/etc/wireguard/wg0.conf
           EOF
+          # Enable wg0 service by default
+          sudo mkdir -p rootfs/etc/systemd/system/multi-user.target.wants
+          sudo ln -sf /lib/systemd/system/wg-quick@.service \
+            rootfs/etc/systemd/system/multi-user.target.wants/wg-quick@wg0.service
 
           # Enable forwarding by default (harmless if you don't NAT)
           sudo mkdir -p rootfs/etc/sysctl.d
