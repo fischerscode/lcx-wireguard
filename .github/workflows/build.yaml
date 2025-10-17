@@ -57,6 +57,10 @@ jobs:
           ConditionPathExists=/etc/wireguard/wg0.conf
           EOF
           # Enable wg0 service by default
+          sudo mkdir -p rootfs/etc/systemd/system/multi-user.target.wants
+          sudo ln -sf /usr/lib/systemd/system/wg-quick@.service \
+            rootfs/etc/systemd/system/multi-user.target.wants/wg-quick@wg0.service
+
           sudo mkdir -p rootfs/etc/systemd/system/network-online.target.wants
           sudo ln -sf /lib/systemd/system/ifupdown-wait-online.service \
             rootfs/etc/systemd/system/network-online.target.wants/ifupdown-wait-online.service
