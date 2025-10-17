@@ -1,50 +1,89 @@
 name: build-wireguard-lxc
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*"] # create a tag like v1.0.0 to trigger a release build
+  workflow_dispatch: # allows manual runs
+
+permissions:
+  contents: write # needed for creating GitHub Releases
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Run the build IN Debian 13 to avoid keyring/mismatch issues
+    container: debian:13-slim
+
+    env:
+      SUITE: trixie
+      ARCH: amd64
+      MIRROR: http://deb.debian.org/debian
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps
+      - name: Install build deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mmdebstrap zstd xz-utils
+          set -euxo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            mmdebstrap debootstrap gnupg ca-certificates \
+            zstd xz-utils tar
 
-      - name: Build rootfs
+      - name: Build minimal Debian rootfs with WireGuard tools
         run: |
-          sudo mmdebstrap --architectures=amd64 --variant=minbase \
+          set -euxo pipefail
+
+          # Build minimal rootfs (no secrets inside)
+          mmdebstrap --architectures=${ARCH} --variant=minbase \
+            --keyring=/usr/share/keyrings/debian-archive-keyring.gpg \
+            --keyring=/usr/share/keyrings/debian-archive-removed-keys.gpg \
+            --aptopt='Acquire::Retries "5"' \
+            --aptopt='Acquire::Languages "none"' \
             --include=wireguard-tools,iproute2,iptables-nft,systemd-sysv,procps,ca-certificates \
-            bookworm rootfs
+            ${SUITE} rootfs ${MIRROR}
 
-          # systemd drop-in so image boots fine with no config present
-          sudo mkdir -p rootfs/etc/systemd/system/wg-quick@wg0.service.d
-          cat <<'EOF' | sudo tee rootfs/etc/systemd/system/wg-quick@wg0.service.d/10-conditional.conf
+          # systemd drop-in: only start if /etc/wireguard/wg0.conf exists
+          mkdir -p rootfs/etc/systemd/system/wg-quick@wg0.service.d
+          cat > rootfs/etc/systemd/system/wg-quick@wg0.service.d/10-conditional.conf <<'EOF'
           [Unit]
           ConditionPathExists=/etc/wireguard/wg0.conf
           EOF
 
-          # Forwarding defaults (harmless if you don't NAT)
-          sudo mkdir -p rootfs/etc/sysctl.d
-          echo 'net.ipv4.ip_forward=1' | sudo tee rootfs/etc/sysctl.d/99-wg.conf
-          echo 'net.ipv6.conf.all.forwarding=1' | sudo tee -a rootfs/etc/sysctl.d/99-wg.conf
+          # Enable forwarding by default (harmless if you don't NAT)
+          mkdir -p rootfs/etc/sysctl.d
+          printf 'net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\n' \
+            > rootfs/etc/sysctl.d/99-wg.conf
 
-          # empty dir to be over-mounted later
-          sudo mkdir -p rootfs/etc/wireguard
+          # Empty dir to be bind-mounted read-only later by Terraform
+          mkdir -p rootfs/etc/wireguard
 
-      - name: Pack template
+          # Optional: trim APT lists to keep the image small
+          rm -rf rootfs/var/lib/apt/lists/* || true
+
+      - name: Pack Proxmox LXC template (.tar.zst)
         run: |
-          T="debian-12-wireguard-amd64_${{ github.ref_name }}.tar"
-          sudo tar --numeric-owner --xattrs --acls -C rootfs -cf "$T"
-          zstd -19 --rm "$T"
-          sha256sum "${T}.zst" > SHA256SUMS
+          set -euxo pipefail
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          TEMPLATE="debian-13-wireguard-${ARCH}_${VERSION}.tar"
+          tar --numeric-owner --xattrs --acls -C rootfs -cf "${TEMPLATE}"
+          zstd -19 --rm "${TEMPLATE}"
+          sha256sum "${TEMPLATE}.zst" > SHA256SUMS
 
-      - name: Release
+      - name: Create GitHub Release (upload artifact + checksums)
         uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
         with:
+          name: "WireGuard LXC template ${GITHUB_REF_NAME} (Debian 13)"
           files: |
+            *.tar.zst
+            SHA256SUMS
+          generate_release_notes: true
+
+      - name: Upload artifact (for workflow runs without a tag)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wireguard-lxc-${{ github.run_id }}
+          path: |
             *.tar.zst
             SHA256SUMS
